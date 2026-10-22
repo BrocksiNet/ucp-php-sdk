@@ -7,6 +7,7 @@ namespace Ucp\Sdk\Symfony\Tests\Unit;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Ucp\Sdk\Contract\IdentityLinkingCapabilityInterface;
 use Ucp\Sdk\Exception\UnsupportedCapabilityException;
 use Ucp\Sdk\Model\Config\RuntimeConfiguration;
@@ -39,16 +40,53 @@ final class OAuthControllerTest extends TestCase
      * `/.well-known/oauth-authorization-server` is unauthenticated, so it builds its own
      * context rather than reading one off the request. That means it reaches the guard by
      * a different route from authorize() and token(), and is worth asserting separately.
+     *
+     * It refuses with a 404 rather than a 501, because the root path is shared with other
+     * OAuth servers on the host and RFC 8414 clients only try the next candidate after a 404.
      */
     #[Test]
-    public function metadataIsRefusedWhenNoIdentityLinkingCapabilityIsRegistered(): void
+    public function metadataIsNotFoundWhenNoIdentityLinkingCapabilityIsRegistered(): void
     {
         $controller = $this->controller(capability: null);
 
-        $this->expectException(UnsupportedCapabilityException::class);
-        $this->expectExceptionMessage('Identity linking capability is not registered.');
+        try {
+            $controller->metadata(Request::create('https://merchant.example/.well-known/oauth-authorization-server'));
+            self::fail('Expected the metadata endpoint to refuse.');
+        } catch (NotFoundHttpException $exception) {
+            self::assertSame(404, $exception->getStatusCode());
+            self::assertInstanceOf(UnsupportedCapabilityException::class, $exception->getPrevious());
+            self::assertSame('Identity linking capability is not registered.', $exception->getPrevious()->getMessage());
+        }
+    }
 
-        $controller->metadata(Request::create('https://merchant.example/.well-known/oauth-authorization-server'));
+    #[Test]
+    public function metadataIsNotFoundWhenIdentityLinkingIsDisabledByConfiguration(): void
+    {
+        $controller = $this->controller(
+            capability: new StubIdentityLinkingCapability(),
+            enabledCapabilities: ['dev.ucp.shopping.cart'],
+        );
+
+        try {
+            $controller->metadata(Request::create('https://merchant.example/.well-known/oauth-authorization-server'));
+            self::fail('Expected the metadata endpoint to refuse.');
+        } catch (NotFoundHttpException $exception) {
+            self::assertSame('Identity linking capability is disabled by runtime configuration.', $exception->getPrevious()?->getMessage());
+        }
+    }
+
+    #[Test]
+    public function metadataAnswersWhenIdentityLinkingIsAmongTheEnabledCapabilities(): void
+    {
+        $controller = $this->controller(
+            capability: new StubIdentityLinkingCapability(),
+            enabledCapabilities: ['dev.ucp.common.identity_linking'],
+        );
+
+        $response = $controller->metadata(Request::create('https://merchant.example/.well-known/oauth-authorization-server'));
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertStringContainsString('ucp\\/v1\\/oauth\\/token', (string) $response->getContent());
     }
 
     #[Test]
