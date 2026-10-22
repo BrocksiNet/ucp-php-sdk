@@ -32,7 +32,9 @@ use Ucp\Sdk\Symfony\UcpSdkConfiguration;
  * that silently stopped guarding would issue tokens for a capability the merchant
  * believes is disabled.
  *
- * The happy paths run through the kernel integration tests; these are the refusals.
+ * Most happy paths run through the kernel integration tests. These are the refusals, plus
+ * the one metadata answer that shows the runtime-configuration guard lets an enabled
+ * capability through.
  */
 final class OAuthControllerTest extends TestCase
 {
@@ -86,7 +88,9 @@ final class OAuthControllerTest extends TestCase
         $response = $controller->metadata(Request::create('https://merchant.example/.well-known/oauth-authorization-server'));
 
         self::assertSame(200, $response->getStatusCode());
-        self::assertStringContainsString('ucp\\/v1\\/oauth\\/token', (string) $response->getContent());
+        $metadata = json_decode((string) $response->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertIsArray($metadata);
+        self::assertSame('https://merchant.example/ucp/v1/oauth/token', $metadata['token_endpoint'] ?? null);
     }
 
     #[Test]
